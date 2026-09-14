@@ -1,5 +1,6 @@
 module Ai
   class SearchService
+    include LlmJson
     def initialize(query, user: User.current, project: nil)
       @query = query
       @user = user
@@ -7,7 +8,10 @@ module Ai
     end
 
     def call
-      return fallback_search unless llm_available?
+      unless llm_available?
+        results = execute_search({ q: @query, scope: "all", filters: {} })
+        return { q: @query, scope: "all", filters: {}, results:, summary: nil, count: results.size }
+      end
 
       structured = parse_query
       return fallback_search if structured[:q].blank?
@@ -41,9 +45,9 @@ module Ai
       PROMPT
 
       response = llm.chat([{ role: "system", content: prompt }, { role: "user", content: @query }])
-      content = response.is_a?(Hash) ? response.dig("message", "content") : response
-      JSON.parse(content).deep_symbolize_keys
-    rescue JSON::ParserError
+      content = content_from(response)
+      JSON.parse(extract_json(content)).deep_symbolize_keys
+    rescue JSON::ParserError, TypeError
       { q: @query, scope: "all", filters: {} }
     end
 
@@ -71,21 +75,35 @@ module Ai
       end
 
       if params[:priority].present?
-        scope = scope.where(priority_id: Priority.where(name: params[:priority]).select(:id))
+        scope = scope.where(priority_id: IssuePriority.where(name: params[:priority]).select(:id))
       end
 
-      search_term = "%#{params[:q]}%"
+      search_term = params[:q].to_s.strip
       if params[:scope] == "projects"
-        scope.where("name ILIKE :q OR LOWER(description) ILIKE :q", q: search_term)
+        scope.where("name ILIKE :q OR LOWER(description) ILIKE :q", q: "%#{search_term}%")
              .limit(10)
              .includes(:status, :members)
              .map { |p| project_summary(p) }
       else
-        scope.where("subject ILIKE :q OR LOWER(description) ILIKE :q", q: search_term)
+        clauses, args = token_conditions(search_term)
+        scope.where(clauses, *args)
              .limit(10)
              .includes(:type, :status, :assigned_to, :project)
              .map { |wp| work_package_summary(wp) }
       end
+    end
+
+    # Match each whitespace-separated token against subject/description so that
+    # a phrase like "my open tasks" still surfaces relevant work packages.
+    def token_conditions(query)
+      terms = query.split(/\s+/).reject(&:blank?)
+      return ["1 = 0", []] if terms.empty?
+
+      clauses = terms.map do |t|
+        "(subject ILIKE ? OR LOWER(description) ILIKE ?)"
+      end.join(" AND ")
+      args = terms.flat_map { |t| ["%#{t}%", "%#{t}%"] }
+      [clauses, args]
     end
 
     def work_package_summary(wp)

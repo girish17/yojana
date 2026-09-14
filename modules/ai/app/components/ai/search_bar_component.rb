@@ -16,11 +16,7 @@ module Ai
     end
 
     def suggestions_path
-      if @project
-        project_ai_search_suggestions_path(@project)
-      else
-        ai_search_suggestions_path
-      end
+      Rails.application.routes.url_helpers.ai_search_suggestions_path(project_id: @project&.id)
     end
   end
 end

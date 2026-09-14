@@ -1,5 +1,6 @@
 module Ai
   class SuggestionService
+    include LlmJson
     def initialize(subject:, project:, work_package: nil)
       @subject = subject
       @project = project
@@ -13,7 +14,7 @@ module Ai
       prompt = build_prompt
       response = llm.chat([{ role: "system", content: prompt }, { role: "user", content: @subject }])
       parse_response(response)
-    rescue Ai::LlmClient::Error
+    rescue Ai::LlmClient::Error, StandardError
       empty_suggestions
     end
 
@@ -44,8 +45,17 @@ module Ai
     end
 
     def parse_response(response)
-      JSON.parse(response).deep_symbolize_keys
-    rescue JSON::ParserError
+      content = content_from(response)
+      return empty_suggestions if content.blank?
+
+      parsed = JSON.parse(extract_json(content)).deep_symbolize_keys
+      {
+        type_id: parsed[:type_id],
+        priority_id: parsed[:priority_id],
+        assignee_id: parsed[:assignee_id],
+        reason: parsed[:reason]
+      }
+    rescue JSON::ParserError, TypeError
       empty_suggestions
     end
 

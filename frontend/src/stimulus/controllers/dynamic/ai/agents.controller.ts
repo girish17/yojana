@@ -61,7 +61,7 @@ export default class AgentsController extends Controller {
 
   renderList(agents: Agent[]) {
     if (agents.length === 0) {
-      this.listTarget.innerHTML = `<p class="ai-agents-empty">${I18n.t("ai.no_agents")}</p>`;
+      this.listTarget.innerHTML = `<p class="ai-agents-empty">No AI agents configured yet.</p>`;
       return;
     }
 
@@ -104,7 +104,7 @@ export default class AgentsController extends Controller {
       const data: { executions: Execution[] } = await res.json();
       const execs = data.executions || [];
       if (execs.length === 0) {
-        this.executionListTarget.innerHTML = `<p>${I18n.t("ai.no_executions")}</p>`;
+        this.executionListTarget.innerHTML = `<p>No executions yet.</p>`;
       } else {
         this.executionListTarget.innerHTML = execs.map(e => `
           <div class="ai-execution-item">

@@ -197,13 +197,13 @@ RSpec.describe Ai::AgentsController do
     it "returns executions" do
       get :executions, params: { id: agent.id }, format: :json
       expect(response).to have_http_status(:ok)
-      expect(response.parsed_body.length).to eq(1)
+      expect(response.parsed_body["executions"].length).to eq(1)
     end
 
     it "returns executions in reverse chronological order" do
       old_exec = create(:ai_agent_execution, :completed, agent:, created_at: 1.day.ago)
       get :executions, params: { id: agent.id }, format: :json
-      expect(response.parsed_body.first["id"]).to eq(execution.id)
+      expect(response.parsed_body["executions"].first["id"]).to eq(execution.id)
     end
   end
 end

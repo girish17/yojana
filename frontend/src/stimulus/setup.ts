@@ -33,6 +33,7 @@ import AiChatToggleController from './controllers/dynamic/ai/chat-toggle.control
 import AiAgentsController from './controllers/dynamic/ai/agents.controller';
 import AiSearchController from './controllers/dynamic/ai/search.controller';
 import AiSummarizeController from './controllers/dynamic/ai/summarize.controller';
+import AiSmartFillController from './controllers/dynamic/ai/smart-fill.controller';
 
 import AutoSubmit from '@stimulus-components/auto-submit';
 import RevealController from '@stimulus-components/reveal';
@@ -101,6 +102,7 @@ OpenProjectStimulusApplication.preregister('ai--chat-toggle', AiChatToggleContro
 OpenProjectStimulusApplication.preregister('ai--agents', AiAgentsController);
 OpenProjectStimulusApplication.preregister('ai--search', AiSearchController);
 OpenProjectStimulusApplication.preregister('ai--summarize', AiSummarizeController);
+OpenProjectStimulusApplication.preregister('ai--smart-fill', AiSmartFillController);
 
 const instance = OpenProjectStimulusApplication.start();
 window.Stimulus = instance;

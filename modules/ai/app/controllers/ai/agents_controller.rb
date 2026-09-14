@@ -42,7 +42,7 @@ module Ai
     end
 
     def executions
-      render json: @agent.executions.recent.limit(50).map { |e| serialize_execution(e) }
+      render json: { executions: @agent.executions.recent.limit(50).map { |e| serialize_execution(e) } }
     end
 
     private
