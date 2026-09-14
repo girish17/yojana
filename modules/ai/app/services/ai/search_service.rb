@@ -52,13 +52,7 @@ module Ai
     end
 
     def execute_search(params)
-      scope = case params[:scope]&.to_sym
-              when :work_packages then WorkPackage.visible
-              when :projects then Project.visible
-              else WorkPackage.visible
-              end
-
-      scope = scope.where(project_id: @project.id) if @project
+      scope = search_base(params)
 
       if params[:status] == "open"
         scope = scope.where(status_id: Status.where(is_closed: false).select(:id))
@@ -66,42 +60,57 @@ module Ai
         scope = scope.where(status_id: Status.where(is_closed: true).select(:id))
       end
 
-      if params[:assignee] == "me"
-        scope = scope.where(assigned_to_id: @user.id)
+      scope = scope.where(assigned_to_id: @user.id) if params[:assignee] == "me"
+
+      if (type = params[:type].presence) && (matched_type = Type.where("LOWER(name) = ?", type.downcase).first)
+        scope = scope.where(type_id: matched_type.id)
       end
 
-      if params[:type].present?
-        scope = scope.where(type_id: Type.where(name: params[:type]).select(:id))
-      end
-
-      if params[:priority].present?
-        scope = scope.where(priority_id: IssuePriority.where(name: params[:priority]).select(:id))
+      if (priority = params[:priority].presence) &&
+         (matched_priority = IssuePriority.where("LOWER(name) = ?", priority.downcase).first)
+        scope = scope.where(priority_id: matched_priority.id)
       end
 
       search_term = params[:q].to_s.strip
       if params[:scope] == "projects"
-        scope.where("name ILIKE :q OR LOWER(description) ILIKE :q", q: "%#{search_term}%")
-             .limit(10)
-             .includes(:status, :members)
-             .map { |p| project_summary(p) }
-      else
-        clauses, args = token_conditions(search_term)
-        scope.where(clauses, *args)
-             .limit(10)
-             .includes(:type, :status, :assigned_to, :project)
-             .map { |wp| work_package_summary(wp) }
+        return scope.where("name ILIKE :q OR LOWER(description) ILIKE :q", q: "%#{search_term}%")
+                    .limit(10)
+                    .includes(:status, :members)
+                    .map { |p| project_summary(p) }
       end
+
+      # Prefer exact token matches (AND), then relax to any-token (OR) so phrases
+      # like "my open tasks" still surface work packages despite stopwords.
+      results = present(scope, search_term, match_all: true)
+      results = present(scope, search_term, match_all: false) if results.empty?
+      results
     end
 
-    # Match each whitespace-separated token against subject/description so that
-    # a phrase like "my open tasks" still surfaces relevant work packages.
-    def token_conditions(query)
+    def search_base(params)
+      scope = if params[:scope]&.to_sym == :projects
+                Project.visible
+              else
+                WorkPackage.visible
+              end
+      @project ? scope.where(project_id: @project.id) : scope
+    end
+
+    def present(scope, search_term, match_all:)
+      clauses, args = token_conditions(search_term, match_all:)
+      scope.where(clauses, *args)
+           .limit(10)
+           .includes(:type, :status, :assigned_to, :project)
+           .map { |wp| work_package_summary(wp) }
+    end
+
+    # Match each whitespace-separated token against subject/description.
+    # match_all: true ANDs the tokens (strict), false ORs them (lenient).
+    def token_conditions(query, match_all: true)
       terms = query.split(/\s+/).reject(&:blank?)
       return ["1 = 0", []] if terms.empty?
 
-      clauses = terms.map do |t|
-        "(subject ILIKE ? OR LOWER(description) ILIKE ?)"
-      end.join(" AND ")
+      connector = match_all ? " AND " : " OR "
+      clauses = terms.map { |_t| "(subject ILIKE ? OR LOWER(description) ILIKE ?)" }.join(connector)
       args = terms.flat_map { |t| ["%#{t}%", "%#{t}%"] }
       [clauses, args]
     end

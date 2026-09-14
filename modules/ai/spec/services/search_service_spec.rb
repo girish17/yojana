@@ -43,6 +43,39 @@ RSpec.describe Ai::SearchService do
       end
     end
 
+    context "when the LLM requests a type with no matching Type record" do
+      before do
+        allow(llm_client).to receive(:chat).and_return(
+          { "message" => { "role" => "assistant", "content" => { q: "open tasks", scope: "work_packages", type: "feature" }.to_json } },
+          { "message" => { "role" => "assistant", "content" => "Summary" } }
+        )
+      end
+
+      it "ignores the unmatched type filter and still returns results" do
+        result = service.call
+        expect(result[:count]).to eq(1)
+        expect(result[:results].first[:id]).to eq(work_package.id)
+      end
+    end
+
+    context "when strict AND token matching returns nothing" do
+      let!(:loose_match) do
+        create(:work_package, project:, subject: "Deploy sprint board to production")
+      end
+
+      before do
+        allow(llm_client).to receive(:chat).and_return(
+          { "message" => { "role" => "assistant", "content" => { q: "deploy sprint review", scope: "work_packages" }.to_json } },
+          { "message" => { "role" => "assistant", "content" => "Summary" } }
+        )
+      end
+
+      it "relaxes to OR matching and surfaces partial matches" do
+        result = service.call
+        expect(result[:results].map { |r| r[:id] }).to include(loose_match.id)
+      end
+    end
+
     context "when the LLM wraps the JSON in markdown fences" do
       before do
         allow(llm_client).to receive(:chat).and_return(
