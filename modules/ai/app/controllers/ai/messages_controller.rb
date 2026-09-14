@@ -1,5 +1,9 @@
+# frozen_string_literal: true
+
 module Ai
   class MessagesController < ApplicationController
+    include ActionController::Live
+
     no_authorization_required! :index, :create
     before_action :require_login
     before_action :require_ai_chat
@@ -74,7 +78,6 @@ module Ai
 
     def stream_sse(event, data = {})
       response.stream.write("event: #{event}\ndata: #{data.to_json}\n\n")
-      response.stream.flush
     end
 
     def serialize_message(m)
