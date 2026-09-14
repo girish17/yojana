@@ -21,6 +21,7 @@ en:
     label_max_tokens: "Max tokens"
     label_temperature: "Temperature"
     label_unavailable: "AI is unavailable. Check that Ollama is running."
+    chat_error: "Sorry, something went wrong while generating the response. Please try again."
     feature_unavailable: "This AI feature is not available."
     chat_welcome: "Ask me anything about your projects..."
     chat_thinking: "Thinking..."

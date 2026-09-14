@@ -36,28 +36,45 @@ module Ai
       response.headers["Cache-Control"] = "no-cache"
       response.headers["X-Accel-Buffering"] = "no"
 
-      sse = ["event: connected\ndata: {}\n\n"]
+      stream_sse(:connected)
 
-      Ai::ChatService.new(conversation: @conversation, user: User.current).call(stream: false) do |event|
+      Ai::ChatService.new(conversation: @conversation, user: User.current).call(stream: true) do |event|
         case event[:type]
+        when :token
+          stream_sse(:token, token: event[:content])
         when :done
-          sse << "event: token\ndata: #{({ token: event[:content] }).to_json}\n\n"
-          sse << "event: done\ndata: #{({ content: event[:content] }).to_json}\n\n"
+          stream_sse(:done, content: event[:content])
         when :error
-          sse << "event: error\ndata: #{({ message: event[:message] }).to_json}\n\n"
+          stream_sse(:error, message: event[:message])
         when :tool_calls_start
-          sse << "event: tool_calls_start\ndata: {}\n\n"
+          stream_sse(:tool_calls_start)
         when :tool_call
-          sse << "event: tool_call\ndata: #{({ name: event[:name], arguments: event[:arguments] }).to_json}\n\n"
+          stream_sse(:tool_call, name: event[:name], arguments: event[:arguments])
         when :tool_result
-          sse << "event: tool_result\ndata: #{({ name: event[:name] }).to_json}\n\n"
+          stream_sse(:tool_result, name: event[:name])
         when :tool_calls_end
-          sse << "event: tool_calls_end\ndata: {}\n\n"
+          stream_sse(:tool_calls_end)
         end
       end
 
-      sse << "event: completed\ndata: {}\n\n"
-      render plain: sse.join, content_type: "text/event-stream"
+      stream_sse(:completed)
+    rescue IOError
+      # Client disconnected — clean up gracefully
+    rescue StandardError => e
+      Rails.logger.error("AI chat stream error: #{e.message}")
+      Rails.logger.error(e.backtrace&.join("\n"))
+      begin
+        stream_sse(:error, message: I18n.t("ai.chat_error"))
+      rescue IOError
+        # Client disconnected while sending the error event
+      end
+    ensure
+      response.stream.close
+    end
+
+    def stream_sse(event, data = {})
+      response.stream.write("event: #{event}\ndata: #{data.to_json}\n\n")
+      response.stream.flush
     end
 
     def serialize_message(m)

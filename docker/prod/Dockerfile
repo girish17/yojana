@@ -206,9 +206,12 @@ RUN mkdir -p /app/frontend/src/app/features/plugins/linked && \
 # Build frontend assets
 # linked/ and linked-plugins.{module.ts,styles.sass} are gitignored in a clean
 # checkout, so regenerate them via the node script before the angular build.
+# Locale JSON files (frontend/src/locales/*.json) are also gitignored and must be
+# exported from the Rails I18n backend before the Angular build.
 RUN cd /app && npm install && \
   cd /app/frontend && npm install && \
   npm run ci:plugins:register_frontend && \
+  DATABASE_URL=nulldb://db bundle exec rake assets:export_locales && \
   npm run build
 
 # Create symlinks for main assets (Angular outputs hashed filenames)
