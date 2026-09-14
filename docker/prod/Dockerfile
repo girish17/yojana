@@ -211,7 +211,7 @@ RUN mkdir -p /app/frontend/src/app/features/plugins/linked && \
 RUN cd /app && npm install && \
   cd /app/frontend && npm install && \
   npm run ci:plugins:register_frontend && \
-  rm -f db/schema_cache.yml && \
+  rm -f /app/db/schema_cache.yml && \
   DATABASE_URL=nulldb://db bundle exec rake assets:export_locales && \
   npm run build
 
