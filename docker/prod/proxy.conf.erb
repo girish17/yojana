@@ -13,6 +13,11 @@
   ProxyRequests off
   ProxyPreserveHost On
 
+  # Allow long-running SSE chat streams (spans LLM tool-call round trips).
+  # Rack::Timeout Rails 503/500 would surface; without this, mod_proxy's
+  # default 300s ProxyTimeout kills chats as 502.
+  ProxyTimeout 1200
+
   # Serve static assets directly from DocumentRoot (Apache)
   <Directory <%= ENV.fetch("APP_PATH") %>/public>
     Options -Indexes +FollowSymLinks
