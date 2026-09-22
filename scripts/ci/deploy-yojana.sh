@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Yojana blue-green deployment on VM `element` (runs on the CI VM/Jenkins).
+# Yojana blue-green deployment to a target VM (runs on the CI VM/Jenkins).
+# Targets are selected via env: VM_NAME / AZURE_RG / AZURE_SUBSCRIPTION / HOSTNAME
+# (e.g. prod=`element`/AZUREQUANTUM, beta=`yojana-t4`/aether-rg).
 # Primary path: az vm run-command (root on VM; no passwordless sudo needed locally).
 #
 # Requires env (Jenkins credentials.yml inject via withCredentials):

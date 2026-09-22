@@ -3,20 +3,52 @@
  * Yojana CI/CD Pipeline (Jenkins job: yojana-pipeline)
  *
  * Test -> build all-in-one linux/amd64 image -> push Docker Hub -> blue-green
- * deploy to VM `element` -> smoke tests. Manual "Build with Parameters".
+ * deploy to the selected target VM -> smoke tests. Manual "Build with Parameters".
+ *
+ * Deploy targets:
+ *   none - build + push only (default)
+ *   beta - T4 GPU VM `yojana-t4` (yojana.matteralchemy.ai, replaces yojana-ma)
+ *   prod - VM `element` (yojana.girishm.info), requires manual approval
+ * For rollback: SKIP_BUILD=true + IMAGE_TAG=<previously-pushed-tag> + a target.
  *
  * Required Jenkins credentials (IDs): see docs/CI-CD-YOJANA.md
  *   github-yojana, dockerhub, yojana-azure-sp, yojana-azure-tenant
  *
  * Parameters:
- *   BRANCH     - branch to test/build/deploy (default dev)
- *   IMAGE_TAG  - override image tag (default dev-azure-<BUILD_NUM>); pass a
- *                previously-pushed tag together with SKIP_BUILD=true to roll
- *                back without rebuilding
- *   SKIP_TEST  - skip lint + spec + unit test stages
- *   SKIP_BUILD - skip image build+push (use with IMAGE_TAG for rollback)
- *   SKIP_DEPLOY- finish after image build+push (no production impact)
+ *   BRANCH          - branch to test/build/deploy (default dev)
+ *   IMAGE_TAG       - override image tag (default dev-azure-<BUILD_NUM>)
+ *   SKIP_TEST       - skip lint + spec + unit test stages
+ *   SKIP_BUILD      - skip image build+push (use with IMAGE_TAG for rollback)
+ *   DEPLOY_TARGET   - none | beta | prod (blue-green deploy to that VM)
+ *   BETA_SUBSCRIPTION - Azure sub of the beta/aether tenant (SP needs RBAC on it)
  */
+
+def deployEnv(String target) {
+  switch (target) {
+    case 'beta':
+      return [
+        "AZURE_SUBSCRIPTION=${params.BETA_SUBSCRIPTION ?: ''}",
+        'AZURE_RG=aether-rg',
+        'VM_NAME=yojana-t4',
+        'HOSTNAME=yojana.matteralchemy.ai',
+        'CONTAINER_NAME=yojana-v5',
+      ]
+    case 'prod':
+      return [
+        'AZURE_SUBSCRIPTION=5a1ef3e9-7b40-4163-b0ff-d0b8d2ec6e62',
+        'AZURE_RG=AZUREQUANTUM',
+        'VM_NAME=element',
+        'HOSTNAME=yojana.girishm.info',
+        'CONTAINER_NAME=yojana-v5',
+      ]
+    default:
+      return []
+  }
+}
+
+def targetUrl(String target) {
+  target == 'prod' ? 'https://yojana.girishm.info' : 'https://yojana.matteralchemy.ai'
+}
 
 pipeline {
     agent any
@@ -35,8 +67,10 @@ pipeline {
                description: 'Skip lint + spec + unit test stages.')
         booleanParam(name: 'SKIP_BUILD', defaultValue: false,
                description: 'Skip image build+push (deploy an existing tag).')
-        booleanParam(name: 'SKIP_DEPLOY', defaultValue: true,
-               description: 'Build+push the image only; do not deploy to production.')
+        choice(name: 'DEPLOY_TARGET', choices: ['none', 'beta', 'prod'],
+               description: "Deploy after build. none = build+push only (default). beta = T4 GPU VM `yojana-t4` (yojana.matteralchemy.ai). prod = VM `element` (yojana.girishm.info, manual approval). Rollback: SKIP_BUILD=true + IMAGE_TAG + target.")
+        string(name: 'BETA_SUBSCRIPTION', defaultValue: '',
+               description: 'Azure subscription id of the beta/aether sub. The `yojana-azure-sp` principal must have RBAC (Contributor) on it for beta deploys.')
     }
 
     environment {
@@ -44,10 +78,6 @@ pipeline {
         BRANCH = "${params.BRANCH}"
         IMAGE_TAG = "${params.IMAGE_TAG ?: 'dev-azure-' + env.BUILD_NUMBER}"
         IMAGE_BASE = 'girish17/yojana'
-        AZURE_SUBSCRIPTION = '5a1ef3e9-7b40-4163-b0ff-d0b8d2ec6e62'
-        AZURE_RG = 'AZUREQUANTUM'
-        VM_NAME = 'element'
-        CONTAINER_NAME = 'yojana-v5'
         NOTIFY_EMAIL = 'm.girish.cs@gmail.com'
     }
 
@@ -114,7 +144,7 @@ pipeline {
         }
 
         stage('Approve deploy') {
-            when { expression { !params.SKIP_DEPLOY } }
+            when { expression { params.DEPLOY_TARGET == 'prod' } }
             steps {
                 script {
                     input message: "Deploy ${IMAGE_TAG} to yojana.girishm.info? (rollback mode: ${params.SKIP_BUILD})",
@@ -124,23 +154,31 @@ pipeline {
         }
 
         stage('Deploy blue-green') {
-            when { expression { !params.SKIP_DEPLOY } }
+            when { expression { params.DEPLOY_TARGET == 'beta' || params.DEPLOY_TARGET == 'prod' } }
             steps {
-                withCredentials([
-                    usernamePassword(credentialsId: 'yojana-azure-sp',
-                                     usernameVariable: 'AZ_CLIENT_ID',
-                                     passwordVariable: 'AZ_CLIENT_SECRET'),
-                    string(credentialsId: 'yojana-azure-tenant', variable: 'AZ_TENANT_ID')
-                ]) {
-                    sh 'bash scripts/ci/deploy-yojana.sh $IMAGE_TAG'
+                script {
+                    def targetEnv = deployEnv(params.DEPLOY_TARGET)
+                    if (params.DEPLOY_TARGET == 'beta' && (!params.BETA_SUBSCRIPTION?.trim())) {
+                        error "BETA_SUBSCRIPTION parameter is required for beta deploys (SP needs RBAC on that sub)."
+                    }
+                    withCredentials([
+                        usernamePassword(credentialsId: 'yojana-azure-sp',
+                                         usernameVariable: 'AZ_CLIENT_ID',
+                                         passwordVariable: 'AZ_CLIENT_SECRET'),
+                        string(credentialsId: 'yojana-azure-tenant', variable: 'AZ_TENANT_ID')
+                    ]) {
+                        withEnv(targetEnv) {
+                            sh 'bash scripts/ci/deploy-yojana.sh $IMAGE_TAG'
+                        }
+                    }
                 }
             }
         }
 
         stage('Smoke tests') {
-            when { expression { !params.SKIP_DEPLOY } }
+            when { expression { params.DEPLOY_TARGET == 'beta' || params.DEPLOY_TARGET == 'prod' } }
             steps {
-                sh 'bash scripts/ci/smoke-test.sh https://yojana.girishm.info'
+                sh "bash scripts/ci/smoke-test.sh ${targetUrl(params.DEPLOY_TARGET)}"
             }
         }
     }
