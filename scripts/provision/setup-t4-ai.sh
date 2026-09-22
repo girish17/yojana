@@ -14,12 +14,12 @@
 # Required env (only if not already logged in with az):
 #   AZ_CLIENT_ID, AZ_CLIENT_SECRET, AZ_TENANT_ID
 #
-# Optional env (defaults match the T4 migration plan):
-#   AZURE_SUBSCRIPTION  subscription id
+# Optional env (defaults match the deployed beta host, aether-gpu-01):
+#   AZURE_SUBSCRIPTION  subscription id (aether/startup-credit sub)
 #   AZURE_RG=aether-rg
-#   REGION=westus2
-#   VM_NAME=yojana-t4
-#   SKU=Standard_NC8as_T4_v3
+#   REGION=eastus
+#   VM_NAME=aether-gpu-01
+#   SKU=Standard_NC4as_T4_v3
 #   ADMIN_USER=azureuser
 #   MODELS="qwen3:14b llama3.2:3b"
 #   DRIVER_EXT_VERSION=1.6
@@ -27,9 +27,9 @@ set -euo pipefail
 
 AZURE_SUBSCRIPTION="${AZURE_SUBSCRIPTION:?set AZURE_SUBSCRIPTION (e.g. the aether/startup-credit sub used by yojana-ma)}"
 AZURE_RG="${AZURE_RG:-aether-rg}"
-REGION="${REGION:-westus2}"
-VM_NAME="${VM_NAME:-yojana-t4}"
-SKU="${SKU:-Standard_NC8as_T4_v3}"
+REGION="${REGION:-eastus}"
+VM_NAME="${VM_NAME:-aether-gpu-01}"
+SKU="${SKU:-Standard_NC4as_T4_v3}"
 ADMIN_USER="${ADMIN_USER:-azureuser}"
 MODELS="${MODELS:-qwen3:14b llama3.2:3b}"
 DRIVER_EXT_VERSION="${DRIVER_EXT_VERSION:-1.6}"
@@ -128,7 +128,7 @@ provision() {
 pull_models() {
   echo "==> Pulling models (backgrounded): $MODELS..."
   rc "models pull start" \
-    "rm -f $PULL_PID $PULL_LOG; nohup bash -c 'for m in $MODELS; do echo PULLING \$m; ollama pull \$m || exit 1; done' >$PULL_LOG 2>&1 & echo \$! > $PULL_PID" \
+    "rm -f $PULL_PID $PULL_LOG; nohup bash -c 'for m in $MODELS; do echo PULLING \$m; HOME=/root ollama pull \$m || exit 1; done' >$PULL_LOG 2>&1 & echo \$! > $PULL_PID" \
     || return 1
   for i in $(seq 1 60); do
     sleep 20
@@ -136,7 +136,7 @@ pull_models() {
     state="$(vm_out "if kill -0 \$(cat $PULL_PID 2>/dev/null) 2>/dev/null; then echo RUNNING; else echo DONE; fi; tail -n 2 $PULL_LOG 2>/dev/null")"
     echo "    pull state: $state"
     if echo "$state" | grep -q 'DONE'; then
-      if echo "$state" | grep -qi 'error'; then
+      if echo "$state" | grep -qi 'panic\|error\|failed'; then
         echo "ERROR: model pull failed"
         return 1
       fi
@@ -173,8 +173,8 @@ verify() {
   local default_model="${MODELS%% *}"
   echo "==> Warming default model ($default_model) to confirm GPU offload..."
   rc "warm model" \
-    "ollama run $default_model 'Reply with only the word ok' 2>&1 | tail -n 5; \
-     nvidia-smi --query-gpu=memory.used --format=csv,noheader; ollama ps"
+    "HOME=/root ollama run $default_model 'Reply with only the word ok' 2>&1 | tail -n 5; \
+     nvidia-smi --query-gpu=memory.used --format=csv,noheader; HOME=/root ollama ps"
 
   cat <<'GUIDANCE'
 

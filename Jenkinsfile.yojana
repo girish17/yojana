@@ -7,7 +7,7 @@
  *
  * Deploy targets:
  *   none - build + push only (default)
- *   beta - T4 GPU VM `yojana-t4` (yojana.matteralchemy.ai, replaces yojana-ma)
+ *   beta - T4 GPU VM `aether-gpu-01` (yojana.matteralchemy.ai, replaces yojana-ma)
  *   prod - VM `element` (yojana.girishm.info), requires manual approval
  * For rollback: SKIP_BUILD=true + IMAGE_TAG=<previously-pushed-tag> + a target.
  *
@@ -29,7 +29,7 @@ def deployEnv(String target) {
       return [
         "AZURE_SUBSCRIPTION=${params.BETA_SUBSCRIPTION ?: ''}",
         'AZURE_RG=aether-rg',
-        'VM_NAME=yojana-t4',
+        'VM_NAME=aether-gpu-01',
         'HOSTNAME=yojana.matteralchemy.ai',
         'CONTAINER_NAME=yojana-v5',
       ]
@@ -68,7 +68,7 @@ pipeline {
         booleanParam(name: 'SKIP_BUILD', defaultValue: false,
                description: 'Skip image build+push (deploy an existing tag).')
         choice(name: 'DEPLOY_TARGET', choices: ['none', 'beta', 'prod'],
-               description: "Deploy after build. none = build+push only (default). beta = T4 GPU VM `yojana-t4` (yojana.matteralchemy.ai). prod = VM `element` (yojana.girishm.info, manual approval). Rollback: SKIP_BUILD=true + IMAGE_TAG + target.")
+               description: "Deploy after build. none = build+push only (default). beta = T4 GPU VM `aether-gpu-01` (yojana.matteralchemy.ai). prod = VM `element` (yojana.girishm.info, manual approval). Rollback: SKIP_BUILD=true + IMAGE_TAG + target.")
         string(name: 'BETA_SUBSCRIPTION', defaultValue: '',
                description: 'Azure subscription id of the beta/aether sub. The `yojana-azure-sp` principal must have RBAC (Contributor) on it for beta deploys.')
     }
