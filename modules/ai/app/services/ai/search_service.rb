@@ -1,6 +1,9 @@
+# frozen_string_literal: true
+
 module Ai
   class SearchService
     include LlmJson
+
     def initialize(query, user: User.current, project: nil)
       @query = query
       @user = user
@@ -18,9 +21,7 @@ module Ai
 
       results = execute_search(structured)
       summarize_results(structured, results)
-    rescue Ai::LlmClient::Error
-      fallback_search
-    rescue StandardError
+    rescue Ai::LlmClient::Error, StandardError
       fallback_search
     end
 
@@ -29,7 +30,7 @@ module Ai
     def parse_query
       prompt = <<~PROMPT
         You are a search assistant for Yojana, a project management tool.
-        #{@project ? "User is in project: #{@project.name}" : "No specific project context"}
+        #{@project ? "User is in project: #{@project.name}" : 'No specific project context'}
 
         Parse this natural language query into search parameters.
         Respond with ONLY a JSON object like this:
@@ -51,7 +52,7 @@ module Ai
       { q: @query, scope: "all", filters: {} }
     end
 
-    def execute_search(params)
+    def execute_search(params) # rubocop:disable Metrics/AbcSize,Metrics/PerceivedComplexity
       scope = search_base(params)
 
       if params[:status] == "open"
@@ -106,7 +107,7 @@ module Ai
     # Match each whitespace-separated token against subject/description.
     # match_all: true ANDs the tokens (strict), false ORs them (lenient).
     def token_conditions(query, match_all: true)
-      terms = query.split(/\s+/).reject(&:blank?)
+      terms = query.split(/\s+/).compact_blank
       return ["1 = 0", []] if terms.empty?
 
       connector = match_all ? " AND " : " OR "
@@ -115,15 +116,15 @@ module Ai
       [clauses, args]
     end
 
-    def work_package_summary(wp)
+    def work_package_summary(work_package)
       {
-        id: wp.id,
-        subject: wp.subject,
-        type: wp.type&.name,
-        status: wp.status&.name,
-        assignee: wp.assigned_to&.name,
-        project: wp.project&.name,
-        url: "/work_packages/#{wp.id}"
+        id: work_package.id,
+        subject: work_package.subject,
+        type: work_package.type&.name,
+        status: work_package.status&.name,
+        assignee: work_package.assigned_to&.name,
+        project: work_package.project&.name,
+        url: "/work_packages/#{work_package.id}"
       }
     end
 
@@ -138,7 +139,7 @@ module Ai
       }
     end
 
-    def summarize_results(params, results)
+    def summarize_results(params, results) # rubocop:disable Metrics/AbcSize,Metrics/PerceivedComplexity
       return fallback_search if results.empty?
 
       prompt = <<~PROMPT

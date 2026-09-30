@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Ai
   class ChatService
     MAX_TOOL_CALL_LOOPS = 3
@@ -50,7 +52,11 @@ module Ai
 
         tool_calls.each do |tc|
           tool_name = tc.dig("function", "name")
-          arguments = JSON.parse(tc.dig("function", "arguments") || "{}") rescue {}
+          arguments = begin
+            JSON.parse(tc.dig("function", "arguments") || "{}")
+          rescue StandardError
+            {}
+          end
 
           yield({ type: :tool_call, name: tool_name, arguments: })
 
@@ -78,6 +84,16 @@ module Ai
       yield({ type: :error, message: "An unexpected error occurred: #{e.message}" })
     end
 
+    TEXT_TOOL_CALL_PATTERN = /
+      \{\s*
+        (?:
+          "function"\s*:\s*\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})
+          |
+          "name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})
+        )
+      \s*\}
+    /x
+
     private
 
     def build_messages
@@ -101,7 +117,7 @@ module Ai
         You help users manage their projects, tasks, and portfolios.
 
         Current user: #{@user.name} (#{@user.mail})
-        Current time: #{now.strftime("%Y-%m-%d %H:%M %Z")}
+        Current time: #{now.strftime('%Y-%m-%d %H:%M %Z')}
 
         You have access to tools. When the user asks you to do something, use the appropriate tool.
         Always confirm what you've done and provide relevant URLs when creating or finding items.
@@ -116,16 +132,6 @@ module Ai
         If you need to share structured data, describe it in words or use a markdown table.
       PROMPT
     end
-
-    TEXT_TOOL_CALL_PATTERN = /
-      \{\s*
-        (?:
-          "function"\s*:\s*\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})
-          |
-          "name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]*\})
-        )
-      \s*\}
-    /x
 
     def detect_text_tool_calls(content)
       calls = []

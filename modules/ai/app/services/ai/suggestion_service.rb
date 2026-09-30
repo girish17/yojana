@@ -1,6 +1,9 @@
+# frozen_string_literal: true
+
 module Ai
   class SuggestionService
     include LlmJson
+
     def initialize(subject:, project:, work_package: nil)
       @subject = subject
       @project = project
@@ -20,11 +23,11 @@ module Ai
 
     private
 
-    def build_prompt
+    def build_prompt # rubocop:disable Metrics/AbcSize
       types = @project.types.pluck(:id, :name).map { |id, name| "#{id}: #{name}" }.join(", ")
       priorities = IssuePriority.pluck(:id, :name).map { |id, name| "#{id}: #{name}" }.join(", ")
-      users = @project.members.includes(:principal).map { |m| m.principal }.compact
-      assignees = users.select { |u| u.is_a?(User) }.map { |u| "#{u.id}: #{u.name}" }.join(", ")
+      users = @project.members.includes(:principal).filter_map(&:principal)
+      assignees = users.grep(User).map { |u| "#{u.id}: #{u.name}" }.join(", ")
 
       <<~PROMPT
         You are a project management assistant for Yojana.

@@ -1,8 +1,15 @@
+# frozen_string_literal: true
+
 module Ai
   class LlmClient
-    Error = Class.new(StandardError)
-    ConnectionError = Class.new(Error)
-    ModelNotFoundError = Class.new(Error)
+    class Error < StandardError
+    end
+
+    class ConnectionError < Error
+    end
+
+    class ModelNotFoundError < Error
+    end
 
     def initialize(endpoint: nil, model: nil)
       @endpoint = (endpoint || ENV["OLLAMA_HOST"].presence || setting.ollama_endpoint).chomp("/")
@@ -49,7 +56,7 @@ module Ai
 
     private
 
-    def stream_chat(payload)
+    def stream_chat(payload) # rubocop:disable Metrics/AbcSize,Metrics/PerceivedComplexity
       full_response = { "message" => { "role" => "assistant", "content" => "", "tool_calls" => [] } }
       buffer = +""
 
@@ -136,7 +143,8 @@ module Ai
     def with_timeout_handling
       yield
     rescue Faraday::TimeoutError
-      raise ConnectionError, "Ollama took too long to respond (300s timeout). The model may still be loading from cold start — try again."
+      raise ConnectionError,
+            "Ollama took too long to respond (300s timeout). The model may still be loading — try again."
     end
 
     def setting

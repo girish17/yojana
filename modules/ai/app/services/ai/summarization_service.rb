@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module Ai
   class SummarizationService
     def initialize(text, max_sentences: 2)
