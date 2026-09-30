@@ -5,7 +5,9 @@
 # holds the data dir. We stop the old container first (~2-4 min outage), then
 # green boots on :8081, and Caddy is switched once green is healthy.
 # Host header note: the app rejects `Host: localhost` (400), so health checks
-# must send `-H "Host: $HOSTNAME"`.
+# send `-H "Host: $HOSTNAME"` against /login (returns 200; root redirects to
+# the public https URL, so the probe must NOT follow redirects or it loops out
+# through Caddy to the stopped old container and gets 502).
 # Targets are selected via env: VM_NAME / AZURE_RG / AZURE_SUBSCRIPTION / HOSTNAME
 # (e.g. prod=`element`/AZUREQUANTUM, beta=`aether-gpu-01`/aether-rg).
 # Primary path: az vm run-command (root on VM; no passwordless sudo needed locally).
@@ -143,7 +145,7 @@ echo "==> Waiting for Postgres init + app readiness (up to ~8 min)..."
 GREEN_OK=""
 for i in $(seq 1 24); do
   sleep 20
-  code="$(vm_out "curl -sL -o /dev/null -w '%{http_code}' -H 'Host: $HOSTNAME' http://localhost:8081")"
+  code="$(vm_out "curl -s -o /dev/null -w '%{http_code}' -H 'Host: $HOSTNAME' http://localhost:8081/login")"
   echo "    green health attempt $i -> ${code:-timeout/not-ready}"
   state="$(vm_out "docker ps --filter name=$GREEN_NAME --format '{{.Status}}'")"
   echo "    green container: $state"
