@@ -184,9 +184,7 @@ module Ai
     end
 
     def llm_available?
-      llm.available?
-    rescue StandardError
-      false
+      Ai::LlmClient.available?
     end
   end
 end

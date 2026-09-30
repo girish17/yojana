@@ -50,6 +50,23 @@ def targetUrl(String target) {
   target == 'prod' ? 'https://yojana.girishm.info' : 'https://yojana.matteralchemy.ai'
 }
 
+def deployCredentials(String target) {
+  if (target == 'beta') {
+    return [
+      usernamePassword(credentialsId: 'yojana-azure-sp-beta',
+                       usernameVariable: 'AZ_CLIENT_ID',
+                       passwordVariable: 'AZ_CLIENT_SECRET'),
+      string(credentialsId: 'yojana-azure-tenant-beta', variable: 'AZ_TENANT_ID')
+    ]
+  }
+  return [
+    usernamePassword(credentialsId: 'yojana-azure-sp',
+                     usernameVariable: 'AZ_CLIENT_ID',
+                     passwordVariable: 'AZ_CLIENT_SECRET'),
+    string(credentialsId: 'yojana-azure-tenant', variable: 'AZ_TENANT_ID')
+  ]
+}
+
 pipeline {
     agent any
     options {
@@ -161,12 +178,7 @@ pipeline {
                     if (params.DEPLOY_TARGET == 'beta' && (!params.BETA_SUBSCRIPTION?.trim())) {
                         error "BETA_SUBSCRIPTION parameter is required for beta deploys (SP needs RBAC on that sub)."
                     }
-                    withCredentials([
-                        usernamePassword(credentialsId: 'yojana-azure-sp',
-                                         usernameVariable: 'AZ_CLIENT_ID',
-                                         passwordVariable: 'AZ_CLIENT_SECRET'),
-                        string(credentialsId: 'yojana-azure-tenant', variable: 'AZ_TENANT_ID')
-                    ]) {
+                    withCredentials(deployCredentials(params.DEPLOY_TARGET)) {
                         withEnv(targetEnv) {
                             sh 'bash scripts/ci/deploy-yojana.sh $IMAGE_TAG'
                         }

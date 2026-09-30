@@ -9,9 +9,8 @@ module Ai
       @model = model || setting.default_model
     end
 
-    def chat(messages, tools: nil, stream: nil, &block)
-      payload = { model: @model, messages:, stream: stream ? true : false }
-      payload[:tools] = tools if tools
+    def chat(messages, tools: nil, stream: nil, think: nil, keep_alive: "-1", options: nil, &block)
+      payload = chat_payload(messages, tools:, stream:, think:, keep_alive:, options:)
 
       if stream && block
         stream_chat(payload, &block)
@@ -30,39 +29,94 @@ module Ai
     end
 
     def available?
-      response = connection.get("/api/tags")
-      response.success?
+      cached = self.class.availability_cache[endpoint_key]
+      return true if cached && cached > 15.seconds.ago
+
+      reachable = connection.get("/api/tags").success?
+      self.class.availability_cache[endpoint_key] = reachable ? Time.zone.now : nil
+      reachable
     rescue StandardError
       false
+    end
+
+    def self.available?
+      new.available?
+    end
+
+    def self.availability_cache
+      Thread.current[:ai_llm_available] ||= {}
     end
 
     private
 
     def stream_chat(payload)
       full_response = { "message" => { "role" => "assistant", "content" => "", "tool_calls" => [] } }
+      buffer = +""
+
+      process_line = lambda do |line|
+        line = line.sub(/\r$/, "")
+        next if line.strip.empty?
+
+        parsed = begin
+          JSON.parse(line)
+        rescue JSON::ParserError
+          nil
+        end
+        next if parsed.nil?
+
+        msg = parsed["message"] || {}
+
+        if (content = msg["content"])
+          full_response["message"]["content"] += content
+          yield({ type: :token, content: })
+        end
+
+        if (tool_calls = msg["tool_calls"])
+          full_response["message"]["tool_calls"] = tool_calls
+        end
+
+        if parsed["done"]
+          yield({ type: :done, response: full_response })
+        end
+      end
 
       with_timeout_handling do
         connection.post("/api/chat", payload.to_json) do |req|
           req.options.on_data = ->(chunk, _bytes, _env) do
-            next if chunk.strip.empty?
-            parsed = JSON.parse(chunk) rescue next
-            msg = parsed["message"] || {}
-
-            if (content = msg["content"])
-              full_response["message"]["content"] += content
-              yield({ type: :token, content: })
-            end
-
-            if (tool_calls = msg["tool_calls"])
-              full_response["message"]["tool_calls"] = tool_calls
-            end
-
-            if parsed["done"]
-              yield({ type: :done, response: full_response })
+            buffer << chunk
+            while (newline = buffer.index("\n"))
+              line = buffer.slice!(0, newline)
+              buffer.slice!(0, 1)
+              process_line.call(line)
             end
           end
         end
+        process_line.call(buffer) unless buffer.empty?
       end
+    end
+
+    def chat_payload(messages, tools:, stream:, think:, keep_alive:, options:)
+      payload = {
+        model: @model,
+        messages:,
+        stream: stream ? true : false,
+        keep_alive:,
+        options: generation_options(options || {})
+      }
+      payload[:tools] = tools if tools
+      payload[:think] = think unless think.nil?
+      payload
+    end
+
+    def generation_options(overrides)
+      options = { num_ctx: 8192 }.merge(overrides.to_h.compact)
+      options[:num_predict] = setting.max_tokens if setting.max_tokens
+      options[:temperature] = setting.temperature if setting.temperature
+      options
+    end
+
+    def endpoint_key
+      @endpoint
     end
 
     def connection

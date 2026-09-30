@@ -118,6 +118,8 @@ if ! rc "start green" \
       -e SECRET_KEY_BASE=$SECRET \
       -e OPENPROJECT_HOST__NAME=$HOSTNAME \
       -e RAILS_ENV=production \
+      -e OPENPROJECT_EDITION=standard \
+      -e OPENPROJECT_ATTACHMENTS__STORAGE__PATH=/var/openproject/assets/files \
       $TARGET_IMAGE"; then
   echo "ROLLBACK: cannot start green - production (8080) untouched"
   exit 1

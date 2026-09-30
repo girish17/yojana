@@ -152,7 +152,7 @@ ollama_setup() {
   rc "install ollama" \
     "curl -fsSL https://ollama.com/install.sh | sh && \
      mkdir -p /etc/systemd/system/ollama.service.d && \
-     printf '[Service]\nEnvironment=\"OLLAMA_HOST=0.0.0.0:11434\"\n' > /etc/systemd/system/ollama.service.d/override.conf && \
+     printf '[Service]\nEnvironment=\"OLLAMA_HOST=0.0.0.0:11434\"\nEnvironment=\"OLLAMA_KEEP_ALIVE=-1\"\n' > /etc/systemd/system/ollama.service.d/override.conf && \
      systemctl daemon-reload && systemctl enable --now ollama && systemctl restart ollama && \
      for i in \$(seq 1 30); do curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 2; done && \
      curl -sf http://127.0.0.1:11434/api/tags >/dev/null && echo OLLAMA_UP" \

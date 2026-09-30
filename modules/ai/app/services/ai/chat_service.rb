@@ -1,6 +1,9 @@
 module Ai
   class ChatService
-    MAX_TOOL_CALL_LOOPS = 5
+    MAX_TOOL_CALL_LOOPS = 3
+    MAX_HISTORY_MESSAGES = 16
+    MAX_MESSAGE_LENGTH = 4000
+    MAX_TOOL_RESULT_LENGTH = 3000
 
     def initialize(conversation:, user: User.current)
       @conversation = conversation
@@ -8,7 +11,7 @@ module Ai
       @llm = Ai::LlmClient.new
     end
 
-    def call(stream: true)
+    def call(stream: true, think: false, options: nil) # rubocop:disable Metrics/AbcSize,Metrics/PerceivedComplexity
       messages = build_messages
       tools = tool_definitions
       tool_objects = tool_registry
@@ -17,7 +20,7 @@ module Ai
 
       begin
         if stream
-          @llm.chat(messages, tools:, stream: true) do |event|
+          @llm.chat(messages, tools:, stream: true, think:, options:) do |event|
             case event[:type]
             when :token
               yield({ type: :token, content: event[:content] })
@@ -26,7 +29,7 @@ module Ai
             end
           end
         else
-          @last_response = @llm.chat(messages, tools:, stream: false)
+          @last_response = @llm.chat(messages, tools:, stream: false, think:, options:)
         end
 
         tool_calls = @last_response&.dig("message", "tool_calls")
@@ -54,8 +57,9 @@ module Ai
           tool_class = tool_objects[tool_name]
           if tool_class
             result = tool_class.execute(arguments.with_indifferent_access)
+            result_content = truncate_tool_result(result)
             yield({ type: :tool_result, name: tool_name, result: })
-            messages << { role: "tool", content: result.to_json, tool_call_id: tc["id"] }
+            messages << { role: "tool", content: result_content, tool_call_id: tc["id"] }
           end
         end
 
@@ -78,10 +82,15 @@ module Ai
 
     def build_messages
       system_prompt = build_system_prompt
-      history = @conversation.messages.map do |msg|
-        { role: msg.role, content: msg.content || "" }
+      history = @conversation.messages.last(MAX_HISTORY_MESSAGES).map do |msg|
+        { role: msg.role, content: (msg.content || "").truncate(MAX_MESSAGE_LENGTH) }
       end
       [{ role: "system", content: system_prompt }] + history
+    end
+
+    def truncate_tool_result(result)
+      json = result.to_json
+      json.length > MAX_TOOL_RESULT_LENGTH ? json.truncate(MAX_TOOL_RESULT_LENGTH) : json
     end
 
     def build_system_prompt

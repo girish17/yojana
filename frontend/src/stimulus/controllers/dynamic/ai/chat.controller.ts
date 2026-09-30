@@ -21,6 +21,7 @@ export default class AiChatController extends Controller<HTMLElement> {
   private abortController: AbortController | null = null
   private toolIndicatorEl: HTMLElement | null = null
   private pendingConversations: boolean = false
+  private scrollRafId: number | null = null
 
   connect(): void {
     window.addEventListener("ai:chat:toggle", this.handleToggle)
@@ -320,8 +321,16 @@ export default class AiChatController extends Controller<HTMLElement> {
     const bubble = el.querySelector(".ai-message-bubble")
     if (bubble) {
       bubble.textContent += token
-      this.scrollToBottom()
+      this.requestScrollToBottom()
     }
+  }
+
+  private requestScrollToBottom(): void {
+    if (this.scrollRafId !== null) return
+    this.scrollRafId = requestAnimationFrame(() => {
+      this.scrollRafId = null
+      this.scrollToBottom()
+    })
   }
 
   private setMessageContent(el: HTMLElement, content: string): void {
