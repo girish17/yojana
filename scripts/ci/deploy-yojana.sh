@@ -143,7 +143,7 @@ echo "==> Waiting for Postgres init + app readiness (up to ~8 min)..."
 GREEN_OK=""
 for i in $(seq 1 24); do
   sleep 20
-  code="$(vm_out "curl -s -o /dev/null -w '%{http_code}' -H 'Host: $HOSTNAME' http://localhost:8081")"
+  code="$(vm_out "curl -sL -o /dev/null -w '%{http_code}' -H 'Host: $HOSTNAME' http://localhost:8081")"
   echo "    green health attempt $i -> ${code:-timeout/not-ready}"
   state="$(vm_out "docker ps --filter name=$GREEN_NAME --format '{{.Status}}'")"
   echo "    green container: $state"
