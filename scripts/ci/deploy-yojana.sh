@@ -183,6 +183,7 @@ if ! rc "swap caddy -> 8081" \
 fi
 
 if ! rc "rename containers + stop blue" \
+    "docker rm -f $BLUE_NAME 2>/dev/null || true" \
     "if docker inspect $CONTAINER_NAME >/dev/null 2>&1; then docker rename $CONTAINER_NAME $BLUE_NAME; docker stop $BLUE_NAME || true; fi" \
     "docker rename $GREEN_NAME $CONTAINER_NAME" \
     "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'"; then
