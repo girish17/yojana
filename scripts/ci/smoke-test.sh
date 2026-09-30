@@ -35,9 +35,9 @@ for i in $(seq 1 12); do
 done
 [ -n "$READY" ] || { echo "FAIL: app did not become reachable after cold start"; exit 1; }
 
-check "home"        "$BASE_URL/"
-check "login page"  "$BASE_URL/login"
-check "anchorless /" "$BASE_URL/" 200
+check "home"         "$BASE_URL/" 200 1
+check "login page"   "$BASE_URL/login"
+check "anchorless /" "$BASE_URL/" 200 1
 
 echo
 if [ "$FAILURES" -eq 0 ]; then
