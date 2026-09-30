@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
-# Yojana blue-green deployment to a target VM (runs on the CI VM/Jenkins).
+# Yojana deploy to a target VM (runs on the CI VM/Jenkins).
+# NOTE: stop-start swap, not zero-downtime blue-green - the image embeds its own
+# Postgres on PGDATA_HOST, so green cannot boot while the old container still
+# holds the data dir. We stop the old container first (~2-4 min outage), then
+# green boots on :8081, and Caddy is switched once green is healthy.
+# Host header note: the app rejects `Host: localhost` (400), so health checks
+# must send `-H "Host: $HOSTNAME"`.
 # Targets are selected via env: VM_NAME / AZURE_RG / AZURE_SUBSCRIPTION / HOSTNAME
-# (e.g. prod=`element`/AZUREQUANTUM, beta=`yojana-t4`/aether-rg).
+# (e.g. prod=`element`/AZUREQUANTUM, beta=`aether-gpu-01`/aether-rg).
 # Primary path: az vm run-command (root on VM; no passwordless sudo needed locally).
 #
 # Requires env (Jenkins credentials.yml inject via withCredentials):
@@ -91,10 +97,9 @@ pull_image() {
 # --- Phase 1: backup + pull (live container unaffected) ----------------------
 echo "############ PHASE 1 (backup + pull) ############"
 if rc "backup pg_dump" \
-    "docker exec $CONTAINER_NAME bash -c \"mkdir -p /tmp/yojana-backups && pg_dump -U openproject openproject > /tmp/yojana-backups/pre-$TS.sql 2>/dev/null\"" \
-    "docker cp $CONTAINER_NAME:/tmp/yojana-backups/pre-$TS.sql /tmp/pre-$TS.sql" \
-    "mkdir -p $BACKUP_DIR && cp -f /tmp/pre-$TS.sql $BACKUP_DIR/pre-$TS.sql && ls -lh $BACKUP_DIR/pre-$TS.sql"; then
-  echo "    backup -> $BACKUP_DIR/pre-$TS.sql"
+    "docker exec $CONTAINER_NAME bash -c \"mkdir -p /tmp/yojana-backups && PGPASSWORD=openproject pg_dump -h 127.0.0.1 -U openproject -d openproject -Fc -f /tmp/yojana-backups/pre-$TS.dump 2>&1 | tail -n 2\"" \
+    "docker cp $CONTAINER_NAME:/tmp/yojana-backups/pre-$TS.dump $BACKUP_DIR/pre-$TS.dump 2>/dev/null && ls -lh $BACKUP_DIR/pre-$TS.dump"; then
+  echo "    backup -> $BACKUP_DIR/pre-$TS.dump"
 else
   echo "WARN: backup failed (continuing; pg_dump may have timed out)"
 fi
@@ -109,6 +114,14 @@ echo "############ PHASE 2 (green) ############"
 SECRET="$(vm_out "cat $SECRET_FILE")"
 [ -n "$SECRET" ] || { echo "ERROR: could not read $SECRET_FILE"; exit 1; }
 
+echo "==> Stopping $CONTAINER_NAME (embedded Postgres owns $PGDATA_HOST; only one instance can hold it)"
+if ! rc "stop old primary" \
+    "docker stop $CONTAINER_NAME 2>/dev/null || true" \
+    "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'"; then
+  echo "ERROR: could not stop $CONTAINER_NAME - aborting (production untouched)"
+  exit 1
+fi
+
 echo "==> Starting green container on 8081 (mounts: $VOLUME_NAME, $PGDATA_HOST)"
 if ! rc "start green" \
     "docker rm -f $GREEN_NAME 2>/dev/null || true" \
@@ -121,37 +134,38 @@ if ! rc "start green" \
       -e OPENPROJECT_EDITION=standard \
       -e OPENPROJECT_ATTACHMENTS__STORAGE__PATH=/var/openproject/assets/files \
       $TARGET_IMAGE"; then
-  echo "ROLLBACK: cannot start green - production (8080) untouched"
+  echo "ROLLBACK: cannot start green - restarting old primary"
+  rc "rollback: restart old primary" "docker start $CONTAINER_NAME 2>/dev/null || true"
   exit 1
 fi
 
-echo "==> Waiting for Postgres init + app readiness (up to ~4 min)..."
+echo "==> Waiting for Postgres init + app readiness (up to ~8 min)..."
 GREEN_OK=""
-for i in $(seq 1 12); do
+for i in $(seq 1 24); do
   sleep 20
-  code="$(vm_out "curl -s -o /dev/null -w '%{http_code}' http://localhost:8081")"
+  code="$(vm_out "curl -s -o /dev/null -w '%{http_code}' -H 'Host: $HOSTNAME' http://localhost:8081")"
   echo "    green health attempt $i -> ${code:-timeout/not-ready}"
   state="$(vm_out "docker ps --filter name=$GREEN_NAME --format '{{.Status}}'")"
   echo "    green container: $state"
   if [ "$code" = "200" ]; then GREEN_OK=1; break; fi
-  if [ "$state" != "Up" ] && [ -n "$state" ]; then
+  if [ -n "$state" ] && [ "${state#Up}" = "$state" ]; then
     echo "    green container not running: $state"
     break
   fi
 done
 if [ -z "$GREEN_OK" ]; then
   echo "ERROR: green container did not become healthy"
-  rc "green diagnostics" "docker logs $GREEN_NAME --tail 40 2>&1"
-  rc "rollback: remove green" "docker rm -f $GREEN_NAME 2>/dev/null || true"
-  echo "ROLLBACK DONE: production (8080) untouched"
+  rc "green diagnostics" "docker logs $GREEN_NAME --tail 60 2>&1"
+  rc "rollback: restart old primary" "docker rm -f $GREEN_NAME 2>/dev/null || true; docker start $CONTAINER_NAME 2>/dev/null || true"
+  echo "ROLLBACK: old primary restarted on 8080"
   exit 1
 fi
 echo "==> Green healthy on 8081"
 
 if ! rc "run migrations" "docker exec $GREEN_NAME rake db:migrate"; then
   echo "ERROR: migrations failed on green"
-  rc "rollback: remove green" "docker rm -f $GREEN_NAME 2>/dev/null || true"
-  echo "ROLLBACK DONE: production (8080) untouched"
+  rc "rollback: restart old primary" "docker rm -f $GREEN_NAME 2>/dev/null || true; docker start $CONTAINER_NAME 2>/dev/null || true"
+  echo "ROLLBACK: old primary restarted on 8080"
   exit 1
 fi
 echo "==> Migrations applied on green"
@@ -177,5 +191,5 @@ fi
 
 echo "############ DEPLOY COMPLETE ############"
 echo "Deployed $TARGET_IMAGE; primary=$CONTAINER_NAME (on 8080), previous kept as $BLUE_NAME"
-echo "Backup: $BACKUP_DIR/pre-$TS.sql"
-echo "Cleanup after confidence period: docker rm $BLUE_NAME && rm -f $BACKUP_DIR/pre-$TS.sql /tmp/pre-$TS.sql"
+echo "Backup: $BACKUP_DIR/pre-$TS.dump"
+echo "Cleanup after confidence period: docker rm $BLUE_NAME && rm -f $BACKUP_DIR/pre-$TS.dump /tmp/pre-$TS.dump"
