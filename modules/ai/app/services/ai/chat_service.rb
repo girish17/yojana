@@ -13,7 +13,7 @@ module Ai
       @llm = Ai::LlmClient.new
     end
 
-    def call(stream: true, think: false, options: nil) # rubocop:disable Metrics/AbcSize,Metrics/PerceivedComplexity
+    def call(stream: true, think: nil, options: nil) # rubocop:disable Metrics/AbcSize,Metrics/PerceivedComplexity
       messages = build_messages
       tools = tool_definitions
       tool_objects = tool_registry
@@ -26,6 +26,8 @@ module Ai
             case event[:type]
             when :token
               yield({ type: :token, content: event[:content] })
+            when :thinking
+              yield({ type: :thinking, content: event[:content] })
             when :done
               @last_response = event[:response]
             end

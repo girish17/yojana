@@ -16,7 +16,7 @@ module Ai
       @model = model || setting.default_model
     end
 
-    def chat(messages, tools: nil, stream: nil, think: nil, keep_alive: "-1", options: nil, &block)
+    def chat(messages, tools: nil, stream: nil, think: nil, keep_alive: nil, options: nil, &block)
       payload = chat_payload(messages, tools:, stream:, think:, keep_alive:, options:)
 
       if stream && block
@@ -73,9 +73,14 @@ module Ai
 
         msg = parsed["message"] || {}
 
-        if (content = msg["content"])
+        content = msg["content"]
+        thinking = msg["thinking"]
+
+        if content && !content.empty?
           full_response["message"]["content"] += content
           yield({ type: :token, content: })
+        elsif thinking && !thinking.empty?
+          yield({ type: :thinking, content: thinking })
         end
 
         if (tool_calls = msg["tool_calls"])
@@ -88,7 +93,7 @@ module Ai
       end
 
       with_timeout_handling do
-        connection.post("/api/chat", payload.to_json) do |req|
+        response = connection.post("/api/chat", payload.to_json) do |req|
           req.options.on_data = ->(chunk, _bytes, _env) do
             buffer << chunk
             while (newline = buffer.index("\n"))
@@ -99,6 +104,10 @@ module Ai
           end
         end
         process_line.call(buffer) unless buffer.empty?
+
+        raise ConnectionError, "Ollama returned #{response.status}" unless response.success?
+
+        response
       end
     end
 
@@ -107,11 +116,11 @@ module Ai
         model: @model,
         messages:,
         stream: stream ? true : false,
-        keep_alive:,
         options: generation_options(options || {})
       }
       payload[:tools] = tools if tools
       payload[:think] = think unless think.nil?
+      payload[:keep_alive] = keep_alive if keep_alive
       payload
     end
 

@@ -44,6 +44,8 @@ module Ai
         case event[:type]
         when :token
           stream_sse(:token, token: event[:content])
+        when :thinking
+          stream_sse(:thinking, token: event[:content])
         when :done
           stream_sse(:done, content: event[:content])
         when :error

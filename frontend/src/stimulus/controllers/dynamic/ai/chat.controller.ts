@@ -20,6 +20,7 @@ export default class AiChatController extends Controller<HTMLElement> {
   private currentMessageEl: HTMLElement | null = null
   private abortController: AbortController | null = null
   private toolIndicatorEl: HTMLElement | null = null
+  private thinkingEl: HTMLElement | null = null
   private pendingConversations: boolean = false
   private scrollRafId: number | null = null
 
@@ -74,6 +75,7 @@ export default class AiChatController extends Controller<HTMLElement> {
       }
 
       this.currentMessageEl = this.addAssistantMessage("")
+      this.thinkingEl = null
 
       const resp = await fetch(`/ai/conversations/${this.conversationIdValue}/messages`, {
         method: "POST",
@@ -200,6 +202,9 @@ export default class AiChatController extends Controller<HTMLElement> {
         if (this.currentMessageEl) {
           this.appendMessageContent(this.currentMessageEl, data.token as string || "")
         }
+        break
+      case "thinking":
+        this.showThinking(data.token as string || "")
         break
       case "tool_calls_start":
         this.showToolIndicator("Using tools...")
@@ -354,6 +359,18 @@ export default class AiChatController extends Controller<HTMLElement> {
     this.toolIndicatorEl.innerHTML = `<span class="ai-chat-spinner" style="width:12px;height:12px;"></span> ${this.escapeHtml(text)}`
     this.messagesTarget.appendChild(this.toolIndicatorEl)
     this.scrollToBottom()
+  }
+
+  private showThinking(token: string): void {
+    const bubble = this.currentMessageEl?.querySelector(".ai-message-bubble")
+    if (!bubble) return
+    if (!this.thinkingEl) {
+      this.thinkingEl = document.createElement("div")
+      this.thinkingEl.className = "ai-chat-thinking"
+      bubble.appendChild(this.thinkingEl)
+    }
+    this.thinkingEl.textContent += token
+    this.requestScrollToBottom()
   }
 
   private hideToolIndicator(): void {
