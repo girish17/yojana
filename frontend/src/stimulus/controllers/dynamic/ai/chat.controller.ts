@@ -21,6 +21,8 @@ export default class AiChatController extends Controller<HTMLElement> {
   private abortController: AbortController | null = null
   private toolIndicatorEl: HTMLElement | null = null
   private thinkingEl: HTMLElement | null = null
+  private confirmBarEl: HTMLElement | null = null
+  private pendingConfirmation: string[] | null = null
   private pendingConversations: boolean = false
   private scrollRafId: number | null = null
 
@@ -206,6 +208,9 @@ export default class AiChatController extends Controller<HTMLElement> {
       case "thinking":
         this.showThinking(data.token as string || "")
         break
+      case "need_confirmation":
+        this.showConfirmationBar(data.tool_call_ids as string[])
+        break
       case "tool_calls_start":
         this.showToolIndicator("Using tools...")
         break
@@ -371,6 +376,72 @@ export default class AiChatController extends Controller<HTMLElement> {
     }
     this.thinkingEl.textContent += token
     this.requestScrollToBottom()
+  }
+
+  private showConfirmationBar(toolIds: string[]): void {
+    this.hideConfirmationBar()
+    this.pendingConfirmation = toolIds
+    this.confirmBarEl = document.createElement("div")
+    this.confirmBarEl.className = "ai-chat-confirm-bar"
+
+    const toolNames = toolIds.map(id => {
+      const name = String(id).replace(/^(text-|call-)?/, "")
+      return this.toolLabel(name) || name
+    }).join(", ")
+
+    this.confirmBarEl.innerHTML = `
+      <span class="ai-chat-confirm-text">Proceed with: ${this.escapeHtml(toolNames)}?</span>
+      <button class="ai-chat-confirm-ok" data-action="click->ai--chat#confirmActions">Confirm</button>
+      <button class="ai-chat-confirm-cancel" data-action="click->ai--chat#cancelConfirmation">Cancel</button>
+    `
+    this.messagesTarget.appendChild(this.confirmBarEl)
+    this.scrollToBottom()
+  }
+
+  private hideConfirmationBar(): void {
+    this.confirmBarEl?.remove()
+    this.confirmBarEl = null
+    this.pendingConfirmation = null
+  }
+
+  async confirmActions(event: Event): Promise<void> {
+    event.stopPropagation()
+    if (!this.pendingConfirmation) return
+    const ids = this.pendingConfirmation
+    this.hideConfirmationBar()
+
+    this.streamingValue = true
+    this.abortController = new AbortController()
+
+    try {
+      const resp = await fetch(`/ai/conversations/${this.conversationIdValue}/messages/confirm`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream",
+          "X-CSRF-Token": this.getCsrfToken()
+        },
+        body: JSON.stringify({ confirmed_tool_call_ids: ids.join(",") }),
+        signal: this.abortController.signal
+      })
+      if (resp.ok) await this.readStream(resp)
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== "AbortError") {
+        const el = this.currentMessageEl || this.messagesTarget
+        this.setMessageContent(el, `Error: ${err.message}`)
+      }
+    } finally {
+      this.streamingValue = false
+      this.setLoading(false)
+      this.abortController = null
+      this.hideToolIndicator()
+    }
+  }
+
+  cancelConfirmation(event: Event): void {
+    event.stopPropagation()
+    this.hideConfirmationBar()
+    this.abortStream()
   }
 
   private hideToolIndicator(): void {

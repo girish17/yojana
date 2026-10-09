@@ -36,6 +36,14 @@ module Ai::Tools
               type_id: {
                 type: "integer",
                 description: "ID of the new type"
+              },
+              done_ratio: {
+                type: "integer",
+                description: "Progress percentage (0-100)"
+              },
+              estimated_hours: {
+                type: "string",
+                description: "Estimated effort (e.g., '4h', '2d')"
               }
             },
             required: ["id"]
@@ -47,7 +55,14 @@ module Ai::Tools
     def execute(params)
       wp = WorkPackage.visible.find(params[:id])
 
-      permitted = params.slice(:subject, :description, :status_id, :assignee_id, :priority_id, :type_id)
+      unless User.current.allowed_in_project?(:edit_work_packages, wp.project)
+        return { error: "You don't have permission to update work packages in project '#{wp.project.name}'" }
+      end
+
+      permitted = params.slice(
+        :subject, :description, :status_id, :assignee_id,
+        :priority_id, :type_id, :done_ratio, :estimated_hours
+      )
       permitted = permitted.compact
 
       if permitted.empty?

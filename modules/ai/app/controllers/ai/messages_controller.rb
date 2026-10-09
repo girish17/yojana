@@ -2,7 +2,7 @@
 
 module Ai
   class MessagesController < ApplicationController
-    no_authorization_required! :index, :create
+    no_authorization_required! :index, :create, :confirm
     before_action :require_login
     before_action :require_ai_chat
     before_action :find_conversation
@@ -23,6 +23,13 @@ module Ai
       render json: { status: "created", conversation_id: @conversation.id }, status: :created
     end
 
+    def confirm
+      confirmed = Array(params[:confirmed_tool_call_ids]) & params[:confirmed_tool_call_ids].to_s.strip.split(",")
+      return head :unprocessable_entity if confirmed.empty?
+
+      stream_response(confirmed_tool_calls: confirmed)
+    end
+
     private
 
     def find_conversation
@@ -33,19 +40,25 @@ module Ai
       request.headers["Accept"]&.include?("text/event-stream") || request.format.sse?
     end
 
-    def stream_response
+    def stream_response(confirmed_tool_calls: nil)
       response.headers["Content-Type"] = "text/event-stream"
       response.headers["Cache-Control"] = "no-cache"
       response.headers["X-Accel-Buffering"] = "no"
 
       stream_sse(:connected)
 
-      Ai::ChatService.new(conversation: @conversation, user: User.current).call(stream: true) do |event|
+      Ai::ChatService.new(conversation: @conversation, user: User.current).call(
+        stream: true, confirmed_tool_calls:
+      ) do |event|
         case event[:type]
         when :token
           stream_sse(:token, token: event[:content])
         when :thinking
           stream_sse(:thinking, token: event[:content])
+        when :tool_note
+          stream_sse(:tool_note, note: event[:note])
+        when :need_confirmation
+          stream_sse(:need_confirmation, tool_call_ids: event[:tool_calls])
         when :done
           stream_sse(:done, content: event[:content])
         when :error

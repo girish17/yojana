@@ -2,10 +2,12 @@
 
 module Ai
   class ChatService
-    MAX_TOOL_CALL_LOOPS = 3
+    MAX_TOOL_CALL_LOOPS = 8
     MAX_HISTORY_MESSAGES = 16
     MAX_MESSAGE_LENGTH = 4000
     MAX_TOOL_RESULT_LENGTH = 3000
+
+    DESTRUCTIVE_TOOLS = %w[create_work_package update_work_package change_status reassign_work_package].freeze
 
     def initialize(conversation:, user: User.current)
       @conversation = conversation
@@ -13,7 +15,8 @@ module Ai
       @llm = Ai::LlmClient.new
     end
 
-    def call(stream: true, think: nil, options: nil) # rubocop:disable Metrics/AbcSize,Metrics/PerceivedComplexity
+    def call(stream: true, think: nil, options: nil,
+             confirmed_tool_calls: nil) # rubocop:disable Metrics/AbcSize,Metrics/CyclomaticComplexity,Metrics/PerceivedComplexity
       messages = build_messages
       tools = tool_definitions
       tool_objects = tool_registry
@@ -48,11 +51,31 @@ module Ai
 
         break if tool_calls.blank? || loop_count >= MAX_TOOL_CALL_LOOPS
 
+        destructive_calls, safe_calls = tool_calls.partition do |tc|
+          DESTRUCTIVE_TOOLS.include?(tc.dig("function", "name"))
+        end
+
+        if confirmed_tool_calls && destructive_calls.any?
+          filtered = destructive_calls.select { |tc| confirmed_tool_calls.include?(tc["id"].to_s) }
+          safe_calls += filtered
+          skipped = destructive_calls.length - filtered.length
+          yield({ type: :tool_note, note: "(#{skipped} tool calls skipped — not confirmed by user)" }) if skipped > 0
+        elsif destructive_calls.any?
+          yield({ type: :need_confirmation, tool_calls: destructive_calls.map { |tc|
+            tc["id"] || tc.dig("function", "name")
+          } })
+          yield({ type: :done, content: "" })
+          return
+        end
+
+        runnable = safe_calls
+        break if runnable.empty?
+
         yield({ type: :tool_calls_start })
 
         messages << { role: "assistant", content: @last_response.dig("message", "content") || "", tool_calls: }
 
-        tool_calls.each do |tc|
+        runnable.each do |tc|
           tool_name = tc.dig("function", "name")
           arguments = begin
             JSON.parse(tc.dig("function", "arguments") || "{}")
@@ -116,22 +139,21 @@ module Ai
 
       <<~PROMPT
         You are Yojana AI, an intelligent assistant for Yojana — an open-source project management platform.
-        You help users manage their projects, tasks, and portfolios.
+        You help users manage their projects, tasks, and portfolios. You can take actions on the user's behalf.
 
         Current user: #{@user.name} (#{@user.mail})
         Current time: #{now.strftime('%Y-%m-%d %H:%M %Z')}
 
         You have access to tools. When the user asks you to do something, use the appropriate tool.
-        Always confirm what you've done and provide relevant URLs when creating or finding items.
+        You CAN chain multiple tools together — for example, search for work packages, then update or
+        comment on the ones you find.
+
+        When you create, update, or reassign a work package, always confirm what you did and
+        provide the relevant URL.
         If the user asks about "my tasks" or "my work", use the get_user_tasks tool.
 
-        IMPORTANT: You must NEVER output raw JSON, function call syntax, or tool call definitions
-        as text in your response. For example, do NOT write things like:
-          {"function": {"name": "search_work_packages", ...}}
-        or
-          Here's the result: {"id": 123, "subject": "..."}
-        Always respond in plain natural language, using markdown for formatting (bold, italic, lists, etc).
-        If you need to share structured data, describe it in words or use a markdown table.
+        When presenting results to the user, use plain natural language with markdown formatting
+        (bold, italic, lists, tables). Describe structured data in words — do NOT dump raw JSON.
       PROMPT
     end
 
@@ -167,6 +189,9 @@ module Ai
         "search_work_packages" => Ai::Tools::SearchWorkPackages.new,
         "create_work_package" => Ai::Tools::CreateWorkPackage.new,
         "update_work_package" => Ai::Tools::UpdateWorkPackage.new,
+        "change_status" => Ai::Tools::ChangeStatus.new,
+        "reassign_work_package" => Ai::Tools::ReassignWorkPackage.new,
+        "add_comment" => Ai::Tools::AddComment.new,
         "get_project_info" => Ai::Tools::GetProjectInfo.new,
         "get_user_tasks" => Ai::Tools::GetUserTasks.new,
         "list_projects" => Ai::Tools::ListProjects.new

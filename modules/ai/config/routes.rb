@@ -1,7 +1,9 @@
 Rails.application.routes.draw do
   namespace :ai do
     resources :conversations, only: %i[index show create destroy] do
-      resources :messages, only: %i[index create]
+      resources :messages, only: %i[index create] do
+        post :confirm, on: :collection
+      end
     end
 
     resource :settings, only: %i[show update]

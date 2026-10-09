@@ -32,6 +32,14 @@ module Ai::Tools
               priority_id: {
                 type: "integer",
                 description: "ID of the priority"
+              },
+              responsible_id: {
+                type: "integer",
+                description: "ID of the user responsible for the work package"
+              },
+              version_id: {
+                type: "integer",
+                description: "ID of the version/milestone this work package belongs to"
               }
             },
             required: ["project_id", "subject"]
@@ -44,6 +52,10 @@ module Ai::Tools
       project = Project.visible.find(params[:project_id])
       return { error: "Project not found" } unless project
 
+      unless User.current.allowed_in_project?(:add_work_packages, project)
+        return { error: "You don't have permission to create work packages in this project" }
+      end
+
       wp = project.work_packages.build(
         subject: params[:subject],
         description: params[:description],
@@ -51,9 +63,9 @@ module Ai::Tools
         author: User.current
       )
       wp.assigned_to_id = params[:assignee_id] if params[:assignee_id]
+      wp.responsible_id = params[:responsible_id] if params[:responsible_id]
       wp.priority_id = params[:priority_id] if params[:priority_id]
-
-      User.current.allowed_to_in_project?(:edit_work_packages, project)
+      wp.version_id = params[:version_id] if params[:version_id]
 
       if wp.save
         { id: wp.id, subject: wp.subject, url: "/work_packages/#{wp.id}" }
