@@ -6,6 +6,7 @@ module Ai
     before_action :require_login
     before_action :require_ai_chat
     before_action :find_conversation
+    before_action :extend_timeout_for_sse, only: %i[create confirm]
 
     def index
       messages = @conversation.messages.where.not(role: :tool)
@@ -38,6 +39,13 @@ module Ai
 
     def sse_request?
       request.headers["Accept"]&.include?("text/event-stream") || request.format.sse?
+    end
+
+    def extend_timeout_for_sse
+      return unless sse_request? || action_name == "confirm"
+
+      info = env[Rack::Timeout::ENV_INFO_KEY]
+      info.service_timeout = 600 if info
     end
 
     def stream_response(confirmed_tool_calls: nil)
