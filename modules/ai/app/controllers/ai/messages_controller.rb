@@ -44,7 +44,7 @@ module Ai
     def extend_timeout_for_sse
       return unless sse_request? || action_name == "confirm"
 
-      info = env[Rack::Timeout::ENV_INFO_KEY]
+      info = request.env[Rack::Timeout::ENV_INFO_KEY]
       info.service_timeout = 600 if info
     end
 
