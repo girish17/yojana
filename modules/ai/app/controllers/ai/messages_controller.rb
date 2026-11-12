@@ -45,7 +45,17 @@ module Ai
       return unless sse_request? || action_name == "confirm"
 
       info = request.env[Rack::Timeout::ENV_INFO_KEY]
-      info.service_timeout = 600 if info
+      return unless info
+
+      desired_timeout = 600
+
+      # rack-timeout 0.7 exposes `timeout=` on RequestDetails, while some
+      # newer variants expose `service_timeout=`. Support both without raising.
+      if info.respond_to?(:service_timeout=)
+        info.service_timeout = desired_timeout
+      elsif info.respond_to?(:timeout=)
+        info.timeout = [info.timeout.to_i, desired_timeout].max
+      end
     end
 
     def stream_response(confirmed_tool_calls: nil)

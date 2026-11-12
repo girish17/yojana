@@ -44,7 +44,7 @@ RSpec.describe Ai::MessagesController do
 
     it "streams connected, token, done and completed events" do
       service = stub_chat_service
-      allow(service).to receive(:call) do |stream: true, &block|
+      allow(service).to receive(:call) do |stream: true, **, &block|
         expect(stream).to be(true)
         block.call({ type: :token, content: "Hel" })
         block.call({ type: :token, content: "lo" })
@@ -62,6 +62,21 @@ RSpec.describe Ai::MessagesController do
       expect(body).to include("lo")
       expect(body).to include("event: done")
       expect(body).to include("event: completed")
+    end
+
+    it "does not raise when rack-timeout details have no service_timeout= setter" do
+      service = stub_chat_service
+      allow(service).to receive(:call) do |**, &block|
+        block.call({ type: :done, content: "Hello" })
+      end
+
+      request.headers["Accept"] = "text/event-stream"
+      request.env[Rack::Timeout::ENV_INFO_KEY] = Struct.new(:timeout).new(120)
+
+      post :create, params: { conversation_id: conversation.id, content: "hi" }
+
+      expect(response).to have_http_status(:ok)
+      expect(response.body).to include("event: completed")
     end
 
     it "emits error event when the stream raises" do
