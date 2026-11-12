@@ -2,6 +2,7 @@
 
 require "spec_helper"
 
+# rubocop:disable RSpec/SpecFilePathFormat
 RSpec.describe Ai::MessagesController do
   let(:user) { create(:user, admin: true) }
   let(:conversation) { Ai::Conversation.create!(user:, title: "test") }
@@ -102,3 +103,4 @@ RSpec.describe Ai::MessagesController do
     end
   end
 end
+# rubocop:enable RSpec/SpecFilePathFormat
