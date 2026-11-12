@@ -46,6 +46,40 @@ if OpenProject::Configuration.web_workers >= 2
     service_past_wait: true # Treat the service timeout as independent from the wait timeout
   )
 
+  # Allow longer-running SSE chat streams while keeping the global timeout for
+  # the rest of the application.
+  module OpenProject::AiChatRackTimeoutOverride
+    THREAD_KEY = :op_ai_chat_rack_timeout_service_timeout_override
+    CHAT_SSE_TIMEOUT = 600
+    CHAT_SSE_PATH = %r{\A/ai/conversations/\d+/messages(?:/confirm)?\z}
+
+    def call(env)
+      previous = Thread.current[THREAD_KEY]
+      Thread.current[THREAD_KEY] = CHAT_SSE_TIMEOUT if ai_chat_sse_request?(env)
+      super
+    ensure
+      Thread.current[THREAD_KEY] = previous
+    end
+
+    def service_timeout
+      Thread.current[THREAD_KEY] || super
+    end
+
+    private
+
+    def ai_chat_sse_request?(env)
+      path = env["PATH_INFO"].to_s
+      return false unless path.match?(CHAT_SSE_PATH)
+
+      accept = env["HTTP_ACCEPT"].to_s
+      accept.include?("text/event-stream") || path.end_with?("/confirm")
+    end
+  end
+
+  unless Rack::Timeout < OpenProject::AiChatRackTimeoutOverride
+    Rack::Timeout.prepend(OpenProject::AiChatRackTimeoutOverride)
+  end
+
   Rails.application.config.after_initialize do
     # remove default logger (logging uninteresting extra info with each not timed out request)
     Rack::Timeout.unregister_state_change_observer(:logger)

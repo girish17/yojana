@@ -6,7 +6,6 @@ module Ai
     before_action :require_login
     before_action :ensure_ai_chat_available
     before_action :find_conversation
-    before_action :extend_timeout_for_sse, only: %i[create confirm]
 
     def index
       messages = @conversation.messages.where.not(role: :tool)
@@ -39,23 +38,6 @@ module Ai
 
     def sse_request?
       request.headers["Accept"]&.include?("text/event-stream") || request.format.sse?
-    end
-
-    def extend_timeout_for_sse
-      return unless sse_request? || action_name == "confirm"
-
-      info = request.env[Rack::Timeout::ENV_INFO_KEY]
-      return unless info
-
-      desired_timeout = 600
-
-      # rack-timeout 0.7 exposes `timeout=` on RequestDetails, while some
-      # newer variants expose `service_timeout=`. Support both without raising.
-      if info.respond_to?(:service_timeout=)
-        info.service_timeout = desired_timeout
-      elsif info.respond_to?(:timeout=)
-        info.timeout = [info.timeout.to_i, desired_timeout].max
-      end
     end
 
     def stream_response(confirmed_tool_calls: nil) # rubocop:disable Metrics/AbcSize
