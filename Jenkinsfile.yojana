@@ -21,6 +21,7 @@
  *   SKIP_BUILD      - skip image build+push (use with IMAGE_TAG for rollback)
  *   DEPLOY_TARGET   - none | beta | prod (blue-green deploy to that VM)
  *   BETA_SUBSCRIPTION - Azure sub of the beta/aether tenant (SP needs RBAC on it)
+ *   BETA_BUILD_NUMBER - successful beta build number for the same IMAGE_TAG (required for prod)
  */
 
 def deployEnv(String target) {
@@ -88,6 +89,8 @@ pipeline {
                description: "Deploy after build. none = build+push only (default). beta = T4 GPU VM `aether-gpu-01` (yojana.matteralchemy.ai). prod = VM `element` (yojana.girishm.info, manual approval). Rollback: SKIP_BUILD=true + IMAGE_TAG + target.")
         string(name: 'BETA_SUBSCRIPTION', defaultValue: '',
                description: 'Azure subscription id of the beta/aether sub. The `yojana-azure-sp` principal must have RBAC (Contributor) on it for beta deploys.')
+        string(name: 'BETA_BUILD_NUMBER', defaultValue: '',
+               description: 'Required for prod deploys: successful beta build number of the same IMAGE_TAG.')
     }
 
     environment {
@@ -160,11 +163,195 @@ pipeline {
             }
         }
 
+        stage('Prod gate: artifact pinning') {
+            when { expression { params.DEPLOY_TARGET == 'prod' } }
+            steps {
+                script {
+                    if (!params.SKIP_BUILD) {
+                        error 'Prod deploy requires SKIP_BUILD=true (promote tested artifact only).'
+                    }
+
+                    def tag = params.IMAGE_TAG?.trim()
+                    if (!tag) {
+                        error 'Prod deploy requires explicit IMAGE_TAG.'
+                    }
+
+                    def mutableTags = ['latest', 'dev-azure', 'main', 'dev']
+                    if (mutableTags.contains(tag)) {
+                        error "Mutable IMAGE_TAG '${tag}' is not allowed for prod."
+                    }
+                }
+            }
+        }
+
+        stage('Prod gate: beta parity') {
+            when { expression { params.DEPLOY_TARGET == 'prod' } }
+            steps {
+                script {
+                    if (!params.BETA_SUBSCRIPTION?.trim()) {
+                        error 'BETA_SUBSCRIPTION is required for prod beta-parity verification.'
+                    }
+
+                    withCredentials(deployCredentials('beta')) {
+                        withEnv(deployEnv('beta')) {
+                            sh '''#!/usr/bin/env bash
+set -euo pipefail
+expected_tag="${IMAGE_TAG}"
+
+out="$(az vm run-command invoke \
+  --subscription "${AZURE_SUBSCRIPTION}" --resource-group "${AZURE_RG}" --name "${VM_NAME}" \
+  --command-id RunShellScript \
+  --scripts "docker ps --filter name=${CONTAINER_NAME} --format '{{.Image}}'" \
+  --query "value[0].message" -o tsv)"
+
+running="$(printf '%s\n' "$out" | awk '/^\[stdout\]/{getline; print; exit}' | tr -d '\r')"
+[ -n "$running" ] || { echo "Could not determine running beta image."; exit 1; }
+
+case "$running" in
+  *":${expected_tag}")
+    echo "Beta parity OK: $running"
+    ;;
+  *)
+    echo "Beta parity FAILED: expected tag '${expected_tag}', running '${running}'"
+    exit 1
+    ;;
+esac
+'''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Prod gate: beta validation') {
+            when { expression { params.DEPLOY_TARGET == 'prod' } }
+            steps {
+                script {
+                    if (!params.BETA_BUILD_NUMBER?.trim()) {
+                        error 'BETA_BUILD_NUMBER is required for prod deploys.'
+                    }
+
+                    int betaBuildNo
+                    try {
+                        betaBuildNo = params.BETA_BUILD_NUMBER.toInteger()
+                    } catch (ignored) {
+                        error "BETA_BUILD_NUMBER must be numeric (got: ${params.BETA_BUILD_NUMBER})."
+                    }
+
+                    def job = currentBuild.rawBuild.parent
+                    def betaRun = job.getBuildByNumber(betaBuildNo)
+                    if (!betaRun) {
+                        error "Beta build #${betaBuildNo} not found in ${job.fullName}."
+                    }
+
+                    if (betaRun.isBuilding()) {
+                        error "Beta build #${betaBuildNo} is still running."
+                    }
+
+                    def betaResult = betaRun.getResult()?.toString()
+                    if (betaResult != 'SUCCESS') {
+                        error "Beta build #${betaBuildNo} is not SUCCESS (result=${betaResult})."
+                    }
+
+                    def paramsAction = betaRun.getAction(hudson.model.ParametersAction)
+                    def betaTarget = paramsAction?.getParameter('DEPLOY_TARGET')?.value?.toString()?.trim()
+                    if (betaTarget != 'beta') {
+                        error "Build #${betaBuildNo} is not a beta deploy (DEPLOY_TARGET=${betaTarget})."
+                    }
+
+                    def betaTag = paramsAction?.getParameter('IMAGE_TAG')?.value?.toString()?.trim()
+                    if (!betaTag) {
+                        betaTag = "dev-azure-${betaRun.number}"
+                    }
+
+                    def prodTag = params.IMAGE_TAG.trim()
+                    if (betaTag != prodTag) {
+                        error "Tag mismatch: beta build #${betaBuildNo} resolved tag=${betaTag}, prod tag=${prodTag}."
+                    }
+
+                    echo "Beta validation OK: build #${betaBuildNo}, tag=${betaTag}."
+                }
+            }
+        }
+
+        stage('Prod gate: backup') {
+            when { expression { params.DEPLOY_TARGET == 'prod' } }
+            steps {
+                script {
+                    withCredentials(deployCredentials('prod')) {
+                        withEnv(deployEnv('prod')) {
+                            def output = sh(
+                                returnStdout: true,
+                                script: '''#!/usr/bin/env bash
+set -euo pipefail
+bash scripts/ci/db-backup-create.sh --target prod --image-tag "${IMAGE_TAG}"
+'''
+                            ).trim()
+
+                            def m = (output =~ /BACKUP_ID=([^\r\n]+)/)
+                            if (!m.find()) {
+                                error 'Backup gate failed: BACKUP_ID not found in script output.'
+                            }
+
+                            env.PROD_BACKUP_ID = m.group(1)
+                            echo "Backup gate OK: BACKUP_ID=${env.PROD_BACKUP_ID}"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Prod gate: restore drill') {
+            when { expression { params.DEPLOY_TARGET == 'prod' } }
+            steps {
+                script {
+                    if (!env.PROD_BACKUP_ID?.trim()) {
+                        error 'Missing PROD_BACKUP_ID from backup gate.'
+                    }
+
+                    withCredentials(deployCredentials('prod')) {
+                        withEnv(deployEnv('prod')) {
+                            sh '''#!/usr/bin/env bash
+set -euo pipefail
+bash scripts/ci/db-restore-drill.sh --target prod --backup-id "${PROD_BACKUP_ID}" --verify
+'''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Prod gate: migration safety') {
+            when { expression { params.DEPLOY_TARGET == 'prod' } }
+            steps {
+                sh '''#!/usr/bin/env bash
+set -euo pipefail
+bash scripts/ci/check-migration-safety.sh
+'''
+            }
+        }
+
+        stage('Prod gate: preflight') {
+            when { expression { params.DEPLOY_TARGET == 'prod' } }
+            steps {
+                script {
+                    withCredentials(deployCredentials('prod')) {
+                        withEnv(deployEnv('prod')) {
+                            sh '''#!/usr/bin/env bash
+set -euo pipefail
+bash scripts/ci/prod-preflight.sh --image-tag "${IMAGE_TAG}"
+'''
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Approve deploy') {
             when { expression { params.DEPLOY_TARGET == 'prod' } }
             steps {
                 script {
-                    input message: "Deploy ${IMAGE_TAG} to yojana.girishm.info? (rollback mode: ${params.SKIP_BUILD})",
+                    input message: "Deploy ${IMAGE_TAG} to yojana.girishm.info? (beta build #${params.BETA_BUILD_NUMBER}, backup ${env.PROD_BACKUP_ID ?: 'n/a'}, rollback mode: ${params.SKIP_BUILD})",
                           ok: 'Deploy to production'
                 }
             }
